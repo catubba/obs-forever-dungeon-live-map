@@ -63,7 +63,8 @@ struct Filter {
 	std::optional<Box> box; // the latest square not looked at yet; a newer one takes its place
 	double box_ms = 0;
 	int dungeon = 0, zoom = 0;
-	std::string game; // the game folder chosen; empty for the one the installer says
+	std::string game;          // the game folder chosen; empty for the one the installer says
+	bool track_wanted = false; // a file of the places found, to measure a run
 	bool stop = false;
 	std::thread worker;
 
@@ -205,7 +206,7 @@ bool write_whole(const fs::path &file, const std::string &text)
 // met, read only on the game's side: <plugin config>/builds/<build key>/, holding rooms/, <map number>.txt
 // for each dungeon and raid with rooms (rooms.h), and maps.txt, "number|name|kind" a line, written last.
 // None without a game. chosen: the game folder set in the properties; empty, the one the installer says.
-// ponytail: the folders of older builds are kept; remove them when a build is seen to replace them.
+// The folders of older builds are removed once a newer one is laid.
 struct Installed {
 	fs::path game, folder; // the game folder, and the folder of the rooms of its build
 	Build build;
@@ -277,6 +278,12 @@ std::optional<fs::path> rooms_of_build(const std::string &chosen)
 		if (!write_whole(folder / "maps.txt", index))
 			throw std::runtime_error("cannot write in " + folder.u8string());
 		LOG(LOG_INFO, "rooms of build %s ready in %.1f s", build.version.c_str(), (os_gettime_ns() - started) / 1e9);
+		// The rooms of the builds before this one are not needed any more: they were laid here, by the plugin.
+		for (const fs::directory_entry &old : fs::directory_iterator(folder.parent_path(), error))
+			if (folder.parent_path().filename() == "builds" && old.is_directory() && old.path() != folder) {
+				fs::remove_all(old.path(), error);
+				LOG(LOG_INFO, "rooms of an older build removed: %s", old.path().filename().u8string().c_str());
+			}
 		return folder;
 	} catch (const std::exception &e) {
 		LOG(LOG_WARNING, "the rooms could not be laid: %s", e.what());
@@ -285,8 +292,8 @@ std::optional<fs::path> rooms_of_build(const std::string &chosen)
 }
 
 // A new file for the places found in a dungeon, in the plugin's config folder: track-<dungeon>-<time>.csv,
-// "ms,u,v,facing,likeness,took" a line, as the replay of a recorded run writes them.
-// ponytail: for the trials of M2; M4 decides whether a track is kept at all.
+// "ms,u,v,facing,likeness,took" a line, as the replay of a recorded run writes them. Only when asked for in
+// the properties: it is there to measure a run.
 FILE *open_track(int dungeon)
 {
 	char when[32];
@@ -316,17 +323,28 @@ void work(Filter *f)
 	std::string game = "\x01"; // none yet
 	std::unique_ptr<Follower> follower;
 	FILE *track = nullptr;
+	bool tracking = false, found = false;
 	std::unique_lock<std::mutex> held(f->lock);
 	for (;;) {
 		f->wake.wait(held, [&] {
-			return f->stop || f->box || f->dungeon != dungeon || f->zoom != zoom || f->game != game;
+			return f->stop || f->box || f->dungeon != dungeon || f->zoom != zoom || f->game != game ||
+			       f->track_wanted != tracking;
 		});
 		if (f->stop) {
 			if (track)
 				fclose(track);
 			return;
 		}
+		if (f->track_wanted != tracking && f->dungeon == dungeon && f->zoom == zoom && f->game == game) {
+			tracking = f->track_wanted;
+			if (track)
+				fclose(track);
+			track = tracking && dungeon ? open_track(dungeon) : nullptr;
+			continue;
+		}
 		if (f->dungeon != dungeon || f->zoom != zoom || f->game != game) {
+			tracking = f->track_wanted;
+			found = false;
 			dungeon = f->dungeon;
 			zoom = f->zoom;
 			game = f->game;
@@ -347,7 +365,7 @@ void work(Filter *f)
 			}
 			if (track)
 				fclose(track);
-			track = dungeon ? open_track(dungeon) : nullptr;
+			track = tracking && dungeon ? open_track(dungeon) : nullptr;
 			held.lock();
 			continue;
 		}
@@ -364,12 +382,17 @@ void work(Filter *f)
 			f->shown.place = got;
 		}
 		double took = (os_gettime_ns() - started) / 1e6;
-		// ponytail: a line a look, to follow the trial in the log; M4 shows it on the map instead.
+		// The log tells when the character is found and lost; every look only in OBS's verbose log.
+		if (got && !found)
+			LOG(LOG_INFO, "found at %.1f %.1f, level %d, likeness %.3f", got->u, got->v, got->level, got->score);
+		else if (!got && found)
+			LOG(LOG_INFO, "lost");
+		found = got.has_value();
 		if (got)
-			LOG(LOG_INFO, "at %.1f %.1f, level %d, likeness %.3f, facing %s, %.1f ms", got->u, got->v, got->level,
+			LOG(LOG_DEBUG, "at %.1f %.1f, level %d, likeness %.3f, facing %s, %.1f ms", got->u, got->v, got->level,
 			    got->score, got->facing ? std::to_string(int(std::lround(*got->facing))).c_str() : "-", took);
 		else
-			LOG(LOG_INFO, "no place, %.1f ms", took);
+			LOG(LOG_DEBUG, "no place, %.1f ms", took);
 		if (track) {
 			if (got)
 				fprintf(track, "%.0f,%.2f,%.2f,%s,%.3f,%.1f\n", ms, got->u, got->v,
@@ -398,6 +421,7 @@ void filter_update(void *data, obs_data_t *settings)
 	f->dungeon = int(obs_data_get_int(settings, "dungeon"));
 	f->zoom = int(std::clamp<long long>(obs_data_get_int(settings, "zoom"), 0, 5));
 	f->game = obs_data_get_string(settings, "game");
+	f->track_wanted = obs_data_get_bool(settings, "track");
 	f->wake.notify_one();
 }
 
@@ -490,6 +514,7 @@ obs_properties_t *filter_properties(void *data)
 	obs_properties_add_int_slider(props, "y", obs_module_text("MinimapY"), 0, height > 0 ? height - SMALLEST : 16384, 1);
 	obs_properties_add_int_slider(props, "size", obs_module_text("MinimapSize"), SMALLEST, LARGEST, 1);
 	obs_properties_add_path(props, "game", obs_module_text("GameFolder"), OBS_PATH_DIRECTORY, nullptr, nullptr);
+	obs_properties_add_bool(props, "track", obs_module_text("WriteTrack"));
 	obs_properties_add_button2(
 		props, "save", obs_module_text("SaveMinimap"),
 		[](obs_properties_t *, obs_property_t *, void *data) {
