@@ -23,6 +23,7 @@ target_compile_features(matching PUBLIC cxx_std_17)
 
 set(ZLIB_USE_STATIC_LIBS ON)
 find_package(ZLIB REQUIRED)
+target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE matching ZLIB::ZLIB)
 foreach(tool mosaic-check replay)
   add_executable(${tool} tools/${tool}.cpp)
   target_link_libraries(${tool} PRIVATE matching ZLIB::ZLIB)
