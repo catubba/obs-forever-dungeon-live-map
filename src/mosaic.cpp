@@ -100,6 +100,7 @@ Mosaic mosaic_of_pieces(const std::vector<Piece> &pieces, const PictureOf &pictu
 	m.width = int(std::ceil(hu)) + AROUND - m.u0;
 	m.height = int(std::ceil(hv)) + AROUND - m.v0;
 	m.grey.assign(size_t(m.width) * m.height, 0);
+	m.bgra.assign(size_t(m.width) * m.height * 4, 0);
 
 	for (const Piece &p : pieces) {
 		const std::vector<uint8_t> &dxt = picture_of(p.file);
@@ -119,9 +120,15 @@ Mosaic mosaic_of_pieces(const std::vector<Piece> &pieces, const PictureOf &pictu
 				int px = std::min(w - 1, int(std::floor(x * PIXELS_PER_YARD)));
 				int py = std::min(h - 1, int(std::floor(y * PIXELS_PER_YARD)));
 				const uint8_t *c = &rgba[(size_t(py) * w + px) * 4];
-				if (c[3])
-					m.grey[size_t(v - m.v0) * m.width + (u - m.u0)] =
-						uint8_t(js_round(c[0] * 0.299 + c[1] * 0.587 + c[2] * 0.114));
+				if (c[3]) {
+					size_t at = size_t(v - m.v0) * m.width + (u - m.u0);
+					m.grey[at] = uint8_t(js_round(c[0] * 0.299 + c[1] * 0.587 + c[2] * 0.114));
+					uint8_t *to = &m.bgra[at * 4];
+					to[0] = c[2];
+					to[1] = c[1];
+					to[2] = c[0];
+					to[3] = 255;
+				}
 			}
 		}
 	}

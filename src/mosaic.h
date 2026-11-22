@@ -25,6 +25,8 @@ struct Piece {
 struct Mosaic {
 	int u0 = 0, v0 = 0, width = 0, height = 0;
 	std::vector<uint8_t> grey;
+	/** The same in color, only to be drawn: blue, green, red, alpha a pixel; alpha 0 where there is nothing. */
+	std::vector<uint8_t> bgra;
 	int level = -1;    // the level it shows the rooms up to, in a dungeon with rooms over rooms
 	bool open = false; // the open ground: what the minimap shows under no roof
 };
