@@ -11,6 +11,7 @@
 #include "interiors.h"
 #include "minimap.h"
 #include "rooms.h"
+#include "shown.h"
 
 #include <obs-module.h>
 #include <util/platform.h>
@@ -21,6 +22,7 @@
 #include <cmath>
 #include <condition_variable>
 #include <cstdio>
+#include <cstring>
 #include <ctime>
 #include <filesystem>
 #include <fstream>
@@ -31,8 +33,6 @@
 
 OBS_DECLARE_MODULE()
 OBS_MODULE_USE_DEFAULT_LOCALE("obs-forever-dungeon-live-map", "en-US")
-
-#define LOG(level, format, ...) blog(level, "[obs-forever-dungeon-live-map] " format, ##__VA_ARGS__)
 
 namespace fs = std::filesystem;
 
@@ -62,6 +62,9 @@ struct Filter {
 	std::string game; // the game folder chosen; empty for the one the installer says
 	bool stop = false;
 	std::thread worker;
+
+	// For the source that draws the map.
+	Shown shown;
 };
 
 // A PNG of a box: rows unfiltered, deflated with zlib.
@@ -317,11 +320,16 @@ void work(Filter *f)
 			if (rooms && dungeon)
 				mosaics = mosaics_from_files(*rooms / (std::to_string(dungeon) + ".txt"), *rooms / "rooms");
 			follower = std::make_unique<Follower>(mosaics, widths_of(zoom));
+			LOG(LOG_INFO, "dungeon %d, zoom %d: %zu mosaics in %.0f ms", dungeon, zoom, mosaics.size(),
+			    (os_gettime_ns() - started) / 1e6);
+			{
+				std::lock_guard<std::mutex> showing(f->shown.lock);
+				f->shown.mosaics = mosaics.empty() ? nullptr : std::make_shared<const std::vector<Mosaic>>(std::move(mosaics));
+				f->shown.place.reset();
+			}
 			if (track)
 				fclose(track);
 			track = dungeon ? open_track(dungeon) : nullptr;
-			LOG(LOG_INFO, "dungeon %d, zoom %d: %zu mosaics in %.0f ms", dungeon, zoom, mosaics.size(),
-			    (os_gettime_ns() - started) / 1e6);
 			held.lock();
 			continue;
 		}
@@ -333,6 +341,10 @@ void work(Filter *f)
 		held.unlock();
 		uint64_t started = os_gettime_ns();
 		std::optional<Inside> got = follower->look(box, ms);
+		{
+			std::lock_guard<std::mutex> showing(f->shown.lock);
+			f->shown.place = got;
+		}
 		double took = (os_gettime_ns() - started) / 1e6;
 		// ponytail: a line a look, to follow the trial in the log; M4 shows it on the map instead.
 		if (got)
@@ -445,10 +457,18 @@ void filter_render(void *data, gs_effect_t *)
 
 } // namespace
 
+Shown *shown_of(obs_source_t *filter)
+{
+	if (!filter || strcmp(obs_source_get_unversioned_id(filter), FILTER_ID) != 0)
+		return nullptr;
+	auto *f = static_cast<Filter *>(obs_obj_get_data(filter));
+	return f ? &f->shown : nullptr;
+}
+
 bool obs_module_load(void)
 {
 	obs_source_info info = {};
-	info.id = "forever_dungeon_live_map_filter";
+	info.id = FILTER_ID;
 	info.type = OBS_SOURCE_TYPE_FILTER;
 	info.output_flags = OBS_SOURCE_VIDEO;
 	info.get_name = filter_name;
@@ -459,6 +479,7 @@ bool obs_module_load(void)
 	info.get_properties = filter_properties;
 	info.video_render = filter_render;
 	obs_register_source(&info);
+	register_map_source();
 
 	LOG(LOG_INFO, "loaded (version %s)", PLUGIN_VERSION);
 	return true;
