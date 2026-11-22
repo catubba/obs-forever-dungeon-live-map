@@ -20,13 +20,13 @@ target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE PLUGIN_VERSION="${PLUGI
 # on recorded data share it.
 set(ZLIB_USE_STATIC_LIBS ON)
 find_package(ZLIB REQUIRED)
-add_library(matching STATIC src/mosaic.cpp src/minimap.cpp src/casc.cpp)
+add_library(matching STATIC src/mosaic.cpp src/minimap.cpp src/casc.cpp src/wdc5.cpp src/interiors.cpp)
 target_include_directories(matching PUBLIC src)
 target_compile_features(matching PUBLIC cxx_std_17)
 target_link_libraries(matching PUBLIC ZLIB::ZLIB)
 
 target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE matching)
-foreach(tool mosaic-check replay casc-read)
+foreach(tool mosaic-check replay casc-read maps-list)
   add_executable(${tool} tools/${tool}.cpp)
   target_link_libraries(${tool} PRIVATE matching)
 endforeach()
