@@ -382,7 +382,7 @@ std::optional<Inside> Follower::look(const Box &box, double now)
 		facing = std::fmod(std::atan2(du, -dv) * 180 / PI + 360, 360);
 	else if (!(facing = facing_of(box)) && last)
 		facing = last->inside.facing;
-	last = Last{{found->u, found->v, facing, floors[picture].level}, now, picture, across};
+	last = Last{{found->u, found->v, facing, floors[picture].level, found->score}, now, picture, across};
 	lost_tries = 0;
 	return fresh(now);
 }
