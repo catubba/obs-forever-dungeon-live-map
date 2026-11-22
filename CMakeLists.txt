@@ -16,17 +16,19 @@ target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE OBS::libobs)
 target_sources(${CMAKE_PROJECT_NAME} PRIVATE src/plugin.cpp)
 target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE PLUGIN_VERSION="${PLUGIN_VERSION}")
 
-# The matching, apart from OBS: the plugin and the tools that try it on recorded data share it.
-add_library(matching STATIC src/mosaic.cpp src/minimap.cpp)
-target_include_directories(matching PUBLIC src)
-target_compile_features(matching PUBLIC cxx_std_17)
-
+# The matching and the reading of the game files, apart from OBS: the plugin and the tools that try them
+# on recorded data share it.
 set(ZLIB_USE_STATIC_LIBS ON)
 find_package(ZLIB REQUIRED)
-target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE matching ZLIB::ZLIB)
-foreach(tool mosaic-check replay)
+add_library(matching STATIC src/mosaic.cpp src/minimap.cpp src/casc.cpp)
+target_include_directories(matching PUBLIC src)
+target_compile_features(matching PUBLIC cxx_std_17)
+target_link_libraries(matching PUBLIC ZLIB::ZLIB)
+
+target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE matching)
+foreach(tool mosaic-check replay casc-read)
   add_executable(${tool} tools/${tool}.cpp)
-  target_link_libraries(${tool} PRIVATE matching ZLIB::ZLIB)
+  target_link_libraries(${tool} PRIVATE matching)
 endforeach()
 
 set_target_properties_plugin(${CMAKE_PROJECT_NAME} PROPERTIES OUTPUT_NAME ${_name})
