@@ -2,9 +2,8 @@
 // Copyright (C) 2026 catubba
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// The rooms of a dungeon as Twinmap Forever already took them out of the game, until the plugin reads
-// the game's files itself (M3): pieces.txt, one piece a line ("file u v width height angle level"), or
-// Twinmap's interiors.json, and rooms/<file>.dxt, DXT1 blocks deflated.
+// The rooms of a dungeon as they are kept once taken out of the game (interiors.h): <number>.txt, one piece
+// a line ("file u v width height angle level"), and rooms/<file>.dxt, DXT1 blocks deflated.
 
 #pragma once
 
@@ -12,13 +11,14 @@
 
 #include <zlib.h>
 
+#include <filesystem>
 #include <fstream>
 #include <iterator>
 #include <map>
 #include <string>
 #include <vector>
 
-inline std::vector<uint8_t> inflated(const std::string &path)
+inline std::vector<uint8_t> inflated(const std::filesystem::path &path)
 {
 	std::ifstream in(path, std::ios::binary);
 	std::vector<uint8_t> packed((std::istreambuf_iterator<char>(in)), {}), out;
@@ -42,19 +42,19 @@ inline std::vector<uint8_t> inflated(const std::string &path)
 }
 
 /** The mosaics of a dungeon, a level each, the pictures of its pieces read from the rooms folder. */
-inline std::vector<Mosaic> mosaics_from_rooms(const std::vector<Piece> &pieces, const std::string &rooms)
+inline std::vector<Mosaic> mosaics_from_rooms(const std::vector<Piece> &pieces, const std::filesystem::path &rooms)
 {
 	std::map<uint32_t, std::vector<uint8_t>> pictures;
 	return mosaics_by_level(pieces, [&](uint32_t file) -> const std::vector<uint8_t> & {
 		auto at = pictures.find(file);
 		if (at == pictures.end())
-			at = pictures.emplace(file, inflated(rooms + "/" + std::to_string(file) + ".dxt")).first;
+			at = pictures.emplace(file, inflated(rooms / (std::to_string(file) + ".dxt"))).first;
 		return at->second;
 	});
 }
 
-/** The same from the pieces of pieces.txt. */
-inline std::vector<Mosaic> twinmap_mosaics(const std::string &pieces_txt, const std::string &rooms, size_t *pieces_read = nullptr)
+/** The same from the pieces of a <number>.txt. */
+inline std::vector<Mosaic> mosaics_from_files(const std::filesystem::path &pieces_txt, const std::filesystem::path &rooms, size_t *pieces_read = nullptr)
 {
 	std::vector<Piece> pieces;
 	std::ifstream list(pieces_txt);

@@ -54,6 +54,9 @@ std::optional<Build> installed_build(const std::filesystem::path &folder);
 /** The game folder: the first of these paths, or of their parents, that holds the product. */
 std::optional<std::filesystem::path> game_folder_from(const std::vector<std::filesystem::path> &paths);
 
+/** Where the game's installer said it put the game (Windows registry); none when it says nothing. */
+std::optional<std::filesystem::path> registry_install_path();
+
 /**
  * The keys the server has sent to the game in this folder, by the game's number of each: the game keeps
  * them in its cache (_forever_/Cache/ADB/<language>/DBCache.bin). None when there is no cache.

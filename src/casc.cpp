@@ -4,6 +4,12 @@
 
 #include "casc.h"
 
+#ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+#include <windows.h>
+#endif
+
 #include <zlib.h>
 
 #include <algorithm>
@@ -241,6 +247,18 @@ std::optional<fs::path> game_folder_from(const std::vector<fs::path> &paths)
 			dir = up;
 		}
 	}
+	return std::nullopt;
+}
+
+std::optional<fs::path> registry_install_path()
+{
+#ifdef _WIN32
+	wchar_t path[1024];
+	DWORD size = sizeof path;
+	if (RegGetValueW(HKEY_LOCAL_MACHINE, L"SOFTWARE\\WOW6432Node\\Blizzard Entertainment\\World of Warcraft", L"InstallPath",
+			 RRF_RT_REG_SZ, nullptr, path, &size) == ERROR_SUCCESS)
+		return fs::path(path);
+#endif
 	return std::nullopt;
 }
 

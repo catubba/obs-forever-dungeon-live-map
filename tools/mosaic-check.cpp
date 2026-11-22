@@ -3,11 +3,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
 // Builds the mosaics of a dungeon from pieces and room pictures already taken out of the game, writes
-// them as PGM, and compares them with reference PGMs when given (twinmap.h says what it reads).
+// them as PGM, and compares them with reference PGMs when given (rooms.h says what it reads).
 //   mosaic-check <pieces.txt> <rooms folder> <out prefix> [reference prefix]
 // Writes <out prefix>-<level>.pgm; exits 1 when a reference differs by more than 1 grey.
 
-#include "twinmap.h"
+#include "rooms.h"
 
 #include <algorithm>
 #include <cstdio>
@@ -31,7 +31,7 @@ int main(int argc, char **argv)
 		return 2;
 	}
 	size_t pieces = 0;
-	std::vector<Mosaic> mosaics = twinmap_mosaics(argv[1], argv[2], &pieces);
+	std::vector<Mosaic> mosaics = mosaics_from_files(argv[1], argv[2], &pieces);
 	std::printf("%zu pieces, %zu levels\n", pieces, mosaics.size());
 	int worst = 0;
 	for (size_t level = 0; level < mosaics.size(); level++) {
