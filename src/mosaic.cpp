@@ -139,6 +139,7 @@ std::vector<Mosaic> mosaics_by_level(const std::vector<Piece> &pieces, const Pic
 		std::copy_if(pieces.begin(), pieces.end(), std::back_inserter(upto),
 			     [level](const Piece &p) { return p.level <= level; });
 		out.push_back(mosaic_of_pieces(upto, picture_of));
+		out.back().level = top > 0 ? level : -1;
 	}
 	return out;
 }
