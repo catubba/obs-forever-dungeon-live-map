@@ -47,10 +47,11 @@ The frames come from OBS's own *Game Capture* source. To work, that source loads
 ## Install
 
 1. Close OBS.
-2. Download `obs-forever-dungeon-live-map-<version>-windows-x64.zip` from the [Releases](https://github.com/catubba/obs-forever-dungeon-live-map/releases) page.
-3. Extract it into `C:\ProgramData\obs-studio\plugins\`. The zip holds a folder `obs-forever-dungeon-live-map`, so that you end up with:
-   - `C:\ProgramData\obs-studio\plugins\obs-forever-dungeon-live-map\bin\64bit\obs-forever-dungeon-live-map.dll`
-   - `C:\ProgramData\obs-studio\plugins\obs-forever-dungeon-live-map\data\locale\en-US.ini`
+2. Download the zip of the plugin:
+
+   [![Download v1.0.0 for Windows](https://img.shields.io/badge/Download-v1.0.0%20for%20Windows-0C6A8D?style=for-the-badge&logo=github)](https://github.com/catubba/obs-forever-dungeon-live-map/releases/download/v1.0.0/obs-forever-dungeon-live-map-v1.0.0-windows-x64.zip)
+
+3. Extract the folder `obs-forever-dungeon-live-map` into `C:\ProgramData\obs-studio\plugins\`
 4. Start OBS.
 
 To update, close OBS and extract the new zip over the old folder. To remove the plugin, delete that folder.
