@@ -82,6 +82,12 @@ Go into the dungeon: the dot follows you. Change the dungeon in the filter befor
 
 If the plugin does not find the game, set *World of Warcraft folder* in the filter to the folder that holds `_forever_`.
 
+### Keep the map to yourself
+
+The map does not have to go on stream. To see it only on your own screen, right click OBS's preview, choose *Open Preview Projector*, then a second monitor for a full screen map, or *New window* for a window you can place anywhere. With the game capture hidden (step 6) the projector shows the map alone, and nothing goes out unless you start streaming or recording.
+
+<img src="docs/images/projector.png" alt="Right click on the preview, Open Preview Projector, a monitor or New window" width="760">
+
 ## Build
 
 Windows, Visual Studio 2022 or later with the C++ tools, CMake 3.28 or later:
