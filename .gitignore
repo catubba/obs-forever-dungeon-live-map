@@ -1,3 +1,6 @@
 design/
 build*/
 .vs/
+.deps/
+*.lock.json
+/cmake/.CMakeBuildNumber
