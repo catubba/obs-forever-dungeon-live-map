@@ -4,7 +4,7 @@
 //
 // A recorded run through the follower, as Twinmap Forever's design/minimap/replay.ts does it, to compare
 // the places with Twinmap's own (track-app.csv).
-//   replay <pieces.txt> <rooms folder> <boxes.raw> <boxes.txt> <out.csv> [zoom, default 0]
+//   replay <pieces.txt> <rooms folder> <boxes.raw> <boxes.txt> <out.csv> [zoom, default 0] [open ground .pgm]
 // boxes.raw: the minimap squares one after the other, three bytes a pixel; boxes.txt: the millisecond of
 // each, one a line. Writes "ms,u,v,facing,took" a line, as Twinmap does.
 
@@ -35,6 +35,16 @@ int main(int argc, char **argv)
 		return 2;
 	}
 	std::vector<Mosaic> mosaics = twinmap_mosaics(argv[1], argv[2]);
+	// ponytail: the open ground is not in v1; a PGM of it, as Twinmap builds it, only to compare with Twinmap.
+	if (argc > 7) {
+		Mosaic open;
+		if (!read_pgm(argv[7], open)) {
+			std::fprintf(stderr, "cannot read %s\n", argv[7]);
+			return 1;
+		}
+		open.open = true;
+		mosaics.push_back(std::move(open));
+	}
 	if (mosaics.empty()) {
 		std::fprintf(stderr, "no rooms in %s\n", argv[1]);
 		return 1;
