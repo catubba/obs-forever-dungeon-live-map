@@ -60,7 +60,8 @@ std::optional<double> facing_of(const Box &box);
 struct Inside {
 	double u, v;
 	std::optional<double> facing;
-	int level; // -1 in a dungeon with a single level, and in the open
+	int level;    // -1 in a dungeon with a single level, and in the open
+	double score; // the likeness there, 0 to 1: under SURE when only followed from the place of a moment ago
 };
 
 /**

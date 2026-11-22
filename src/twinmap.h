@@ -2,9 +2,9 @@
 // Copyright (C) 2026 catubba
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// The rooms of a dungeon as Twinmap Forever already took them out of the game, for the tools that try
-// the matching on recorded runs: pieces.txt, one piece a line ("file u v width height angle level"),
-// and rooms/<file>.dxt, DXT1 blocks deflated.
+// The rooms of a dungeon as Twinmap Forever already took them out of the game, until the plugin reads
+// the game's files itself (M3): pieces.txt, one piece a line ("file u v width height angle level"), or
+// Twinmap's interiors.json, and rooms/<file>.dxt, DXT1 blocks deflated.
 
 #pragma once
 
@@ -41,7 +41,19 @@ inline std::vector<uint8_t> inflated(const std::string &path)
 	return out;
 }
 
-/** The pieces of pieces.txt; their pictures from the rooms folder, a level each. */
+/** The mosaics of a dungeon, a level each, the pictures of its pieces read from the rooms folder. */
+inline std::vector<Mosaic> mosaics_from_rooms(const std::vector<Piece> &pieces, const std::string &rooms)
+{
+	std::map<uint32_t, std::vector<uint8_t>> pictures;
+	return mosaics_by_level(pieces, [&](uint32_t file) -> const std::vector<uint8_t> & {
+		auto at = pictures.find(file);
+		if (at == pictures.end())
+			at = pictures.emplace(file, inflated(rooms + "/" + std::to_string(file) + ".dxt")).first;
+		return at->second;
+	});
+}
+
+/** The same from the pieces of pieces.txt. */
 inline std::vector<Mosaic> twinmap_mosaics(const std::string &pieces_txt, const std::string &rooms, size_t *pieces_read = nullptr)
 {
 	std::vector<Piece> pieces;
@@ -50,13 +62,7 @@ inline std::vector<Mosaic> twinmap_mosaics(const std::string &pieces_txt, const 
 		pieces.push_back(p);
 	if (pieces_read)
 		*pieces_read = pieces.size();
-	std::map<uint32_t, std::vector<uint8_t>> pictures;
-	return mosaics_by_level(pieces, [&](uint32_t file) -> const std::vector<uint8_t> & {
-		auto at = pictures.find(file);
-		if (at == pictures.end())
-			at = pictures.emplace(file, inflated(rooms + "/" + std::to_string(file) + ".dxt")).first;
-		return at->second;
-	});
+	return mosaics_from_rooms(pieces, rooms);
 }
 
 /** A mosaic as a PGM whose comment line holds u0 v0. */

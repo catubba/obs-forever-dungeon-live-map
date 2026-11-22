@@ -3,10 +3,12 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
 // The filter that goes on the source capturing the game. It lets the picture through untouched and,
-// when asked, cuts the square of the minimap out of it: the square is drawn alone on a small texture,
-// copied to memory, and read at the next frame, so the graphics card is never waited for.
+// twice a second, cuts the square of the minimap out of it: the square is drawn alone on a small
+// texture, copied to memory, and read at the next frame, so the graphics card is never waited for.
+// The square goes to a thread of its own, which looks for it among the rooms of the dungeon.
 
 #include "minimap.h"
+#include "twinmap.h"
 
 #include <obs-module.h>
 #include <util/platform.h>
@@ -14,23 +16,47 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cmath>
+#include <condition_variable>
 #include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <filesystem>
+#include <memory>
+#include <mutex>
 #include <string>
+#include <thread>
 
 OBS_DECLARE_MODULE()
 OBS_MODULE_USE_DEFAULT_LOCALE("obs-forever-dungeon-live-map", "en-US")
 
+#define LOG(level, format, ...) blog(level, "[obs-forever-dungeon-live-map] " format, ##__VA_ARGS__)
+
 namespace {
 
 constexpr int SMALLEST = 32, LARGEST = 1024; // pixels of the side of the minimap's square
+constexpr uint64_t EVERY_NS = 500000000;      // between two cuts: the follower looks twice a second
 
 struct Filter {
 	obs_source_t *source;
 	std::atomic<int> x{0}, y{0}, size{238};
 	std::atomic<bool> save_wanted{false};
-	gs_texrender_t *texrender = nullptr; // graphics thread only, as the two below
+
+	// Graphics thread only.
+	gs_texrender_t *texrender = nullptr;
 	gs_stagesurf_t *stage = nullptr;
-	int staged = 0; // the side of the square copied at the last frame, still to be read; 0 for none
+	int staged = 0;          // the side of the square copied at the last frame, still to be read; 0 for none
+	uint64_t staged_at = 0;  // when it was cut, in nanoseconds
+	bool saving = false;     // the square still to be read is to be saved as well
+
+	// Shared with the matching thread, under `lock`.
+	std::mutex lock;
+	std::condition_variable wake;
+	std::optional<Box> box; // the latest square not looked at yet; a newer one takes its place
+	double box_ms = 0;
+	int dungeon = 0, zoom = 0;
+	bool stop = false;
+	std::thread worker;
 };
 
 // A PNG of a box: rows unfiltered, deflated with zlib.
@@ -78,23 +104,23 @@ void save(const Box &box)
 	if (folder && path) {
 		os_mkdirs(folder);
 		if (write_png(path, box))
-			blog(LOG_INFO, "[obs-forever-dungeon-live-map] minimap saved to %s", path);
+			LOG(LOG_INFO, "minimap saved to %s", path);
 		else
-			blog(LOG_WARNING, "[obs-forever-dungeon-live-map] could not write %s", path);
+			LOG(LOG_WARNING, "could not write %s", path);
 	}
 	bfree(folder);
 	bfree(path);
 }
 
-// The square copied at the last frame, as a box; nothing when the copy cannot be read.
-void read_staged(Filter *f)
+// The square copied at the last frame, as a box; none when the copy cannot be read.
+std::optional<Box> read_staged(Filter *f)
 {
 	int size = f->staged;
 	f->staged = 0;
 	uint8_t *data;
 	uint32_t linesize;
 	if (!gs_stagesurface_map(f->stage, &data, &linesize))
-		return;
+		return std::nullopt;
 	Box box;
 	box.size = size;
 	box.rgb.resize(size_t(size) * size * 3);
@@ -108,7 +134,7 @@ void read_staged(Filter *f)
 		}
 	}
 	gs_stagesurface_unmap(f->stage);
-	save(box);
+	return box;
 }
 
 // Draws the square of the minimap alone on a texture of its size, and copies it to memory.
@@ -145,6 +171,91 @@ void cut(Filter *f)
 		f->stage = gs_stagesurface_create(size, size, GS_BGRA);
 	gs_stage_texture(f->stage, gs_texrender_get_texture(f->texrender));
 	f->staged = size;
+	f->staged_at = os_gettime_ns();
+}
+
+// The rooms of a dungeon from what Twinmap Forever took out of the game: its interiors.json and rooms
+// folder, in the first build folder under %LOCALAPPDATA%\Twinmap\tiles.
+// ponytail: Twinmap's data until M3 reads the game's files; the open ground is left out (not in v1).
+std::vector<Mosaic> twinmap_dungeon(int id)
+{
+	namespace fs = std::filesystem;
+	const char *local = std::getenv("LOCALAPPDATA");
+	std::error_code error;
+	fs::path folder;
+	if (local)
+		for (const fs::directory_entry &entry : fs::directory_iterator(fs::path(local) / "Twinmap" / "tiles", error))
+			if (entry.is_directory()) {
+				folder = entry.path();
+				break;
+			}
+	if (folder.empty()) {
+		LOG(LOG_WARNING, "no Twinmap data under %%LOCALAPPDATA%%\\Twinmap\\tiles");
+		return {};
+	}
+	std::vector<Piece> pieces;
+	obs_data_t *all = obs_data_create_from_json_file((folder / "interiors.json").u8string().c_str());
+	obs_data_array_t *maps = all ? obs_data_get_array(all, "maps") : nullptr;
+	for (size_t i = 0; maps && i < obs_data_array_count(maps); i++) {
+		obs_data_t *map = obs_data_array_item(maps, i);
+		if (obs_data_get_int(map, "id") == id && strcmp(obs_data_get_string(map, "kind"), "world") != 0) {
+			obs_data_array_t *list = obs_data_get_array(map, "pieces");
+			for (size_t k = 0; k < obs_data_array_count(list); k++) {
+				obs_data_t *p = obs_data_array_item(list, k);
+				pieces.push_back({uint32_t(obs_data_get_int(p, "file")), obs_data_get_double(p, "u"),
+						  obs_data_get_double(p, "v"), obs_data_get_double(p, "width"),
+						  obs_data_get_double(p, "height"), obs_data_get_double(p, "angle"),
+						  int(obs_data_get_int(p, "level"))});
+				obs_data_release(p);
+			}
+			obs_data_array_release(list);
+		}
+		obs_data_release(map);
+	}
+	obs_data_array_release(maps);
+	obs_data_release(all);
+	return mosaics_from_rooms(pieces, (folder / "rooms").u8string());
+}
+
+// The matching thread: builds the mosaics of the dungeon chosen, and looks for each square it is handed.
+void work(Filter *f)
+{
+	int dungeon = -1, zoom = -1;
+	std::unique_ptr<Follower> follower;
+	std::unique_lock<std::mutex> held(f->lock);
+	for (;;) {
+		f->wake.wait(held, [&] { return f->stop || f->box || f->dungeon != dungeon || f->zoom != zoom; });
+		if (f->stop)
+			return;
+		if (f->dungeon != dungeon || f->zoom != zoom) {
+			dungeon = f->dungeon;
+			zoom = f->zoom;
+			held.unlock();
+			uint64_t started = os_gettime_ns();
+			std::vector<Mosaic> mosaics = dungeon ? twinmap_dungeon(dungeon) : std::vector<Mosaic>{};
+			follower = std::make_unique<Follower>(mosaics, widths_of(zoom));
+			LOG(LOG_INFO, "dungeon %d, zoom %d: %zu mosaics in %.0f ms", dungeon, zoom, mosaics.size(),
+			    (os_gettime_ns() - started) / 1e6);
+			held.lock();
+			continue;
+		}
+		Box box = std::move(*f->box);
+		f->box.reset();
+		double ms = f->box_ms;
+		if (!dungeon)
+			continue; // no dungeon chosen: nothing to look for
+		held.unlock();
+		uint64_t started = os_gettime_ns();
+		std::optional<Inside> got = follower->look(box, ms);
+		double took = (os_gettime_ns() - started) / 1e6;
+		// ponytail: a line a look, to follow the trial in the log; M4 shows it on the map instead.
+		if (got)
+			LOG(LOG_INFO, "at %.1f %.1f, level %d, likeness %.3f, facing %s, %.1f ms", got->u, got->v, got->level,
+			    got->score, got->facing ? std::to_string(int(std::lround(*got->facing))).c_str() : "-", took);
+		else
+			LOG(LOG_INFO, "no place, %.1f ms", took);
+		held.lock();
+	}
 }
 
 const char *filter_name(void *)
@@ -158,18 +269,29 @@ void filter_update(void *data, obs_data_t *settings)
 	f->x = int(obs_data_get_int(settings, "x"));
 	f->y = int(obs_data_get_int(settings, "y"));
 	f->size = int(std::clamp<long long>(obs_data_get_int(settings, "size"), SMALLEST, LARGEST));
+	std::lock_guard<std::mutex> held(f->lock);
+	f->dungeon = int(obs_data_get_int(settings, "dungeon"));
+	f->zoom = int(std::clamp<long long>(obs_data_get_int(settings, "zoom"), 0, 5));
+	f->wake.notify_one();
 }
 
 void *filter_create(obs_data_t *settings, obs_source_t *source)
 {
 	auto *f = new Filter{source};
 	filter_update(f, settings);
+	f->worker = std::thread(work, f);
 	return f;
 }
 
 void filter_destroy(void *data)
 {
 	auto *f = static_cast<Filter *>(data);
+	{
+		std::lock_guard<std::mutex> held(f->lock);
+		f->stop = true;
+		f->wake.notify_one();
+	}
+	f->worker.join();
 	obs_enter_graphics();
 	gs_texrender_destroy(f->texrender);
 	gs_stagesurface_destroy(f->stage);
@@ -188,6 +310,8 @@ obs_properties_t *filter_properties(void *data)
 	obs_properties_add_int(props, "x", obs_module_text("MinimapX"), 0, 16384, 1);
 	obs_properties_add_int(props, "y", obs_module_text("MinimapY"), 0, 16384, 1);
 	obs_properties_add_int(props, "size", obs_module_text("MinimapSize"), SMALLEST, LARGEST, 1);
+	obs_properties_add_int(props, "dungeon", obs_module_text("Dungeon"), 0, 100000, 1);
+	obs_properties_add_int(props, "zoom", obs_module_text("Zoom"), 0, 5, 1);
 	obs_properties_add_button2(
 		props, "save", obs_module_text("SaveMinimap"),
 		[](obs_properties_t *, obs_property_t *, void *data) {
@@ -201,10 +325,25 @@ obs_properties_t *filter_properties(void *data)
 void filter_render(void *data, gs_effect_t *)
 {
 	auto *f = static_cast<Filter *>(data);
-	if (f->staged)
-		read_staged(f);
-	if (f->save_wanted.exchange(false))
+	if (f->staged) {
+		uint64_t at = f->staged_at;
+		std::optional<Box> box = read_staged(f);
+		if (box && f->saving)
+			save(*box);
+		f->saving = false;
+		if (box) {
+			std::lock_guard<std::mutex> held(f->lock);
+			f->box = std::move(box);
+			f->box_ms = at / 1e6;
+			f->wake.notify_one();
+		}
+	}
+	uint64_t now = os_gettime_ns();
+	bool save_now = f->save_wanted.exchange(false);
+	if (save_now || now - f->staged_at >= EVERY_NS) {
 		cut(f);
+		f->saving = save_now && f->staged;
+	}
 	obs_source_skip_video_filter(f->source);
 }
 
@@ -225,6 +364,6 @@ bool obs_module_load(void)
 	info.video_render = filter_render;
 	obs_register_source(&info);
 
-	blog(LOG_INFO, "[obs-forever-dungeon-live-map] loaded (version %s)", PLUGIN_VERSION);
+	LOG(LOG_INFO, "loaded (version %s)", PLUGIN_VERSION);
 	return true;
 }
