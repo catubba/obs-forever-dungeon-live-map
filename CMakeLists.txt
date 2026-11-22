@@ -13,7 +13,7 @@ add_library(${CMAKE_PROJECT_NAME} MODULE)
 find_package(libobs REQUIRED)
 target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE OBS::libobs)
 
-target_sources(${CMAKE_PROJECT_NAME} PRIVATE src/plugin.cpp)
+target_sources(${CMAKE_PROJECT_NAME} PRIVATE src/plugin.cpp src/map-source.cpp)
 target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE PLUGIN_VERSION="${PLUGIN_VERSION}")
 
 # The matching and the reading of the game files, apart from OBS: the plugin and the tools that try them
