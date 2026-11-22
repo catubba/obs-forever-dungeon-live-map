@@ -21,6 +21,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <ctime>
 #include <filesystem>
 #include <memory>
 #include <mutex>
@@ -217,16 +218,45 @@ std::vector<Mosaic> twinmap_dungeon(int id)
 	return mosaics_from_rooms(pieces, (folder / "rooms").u8string());
 }
 
+// A new file for the places found in a dungeon, in the plugin's config folder: track-<dungeon>-<time>.csv,
+// "ms,u,v,facing,likeness,took" a line, as the replay of a recorded run writes them.
+// ponytail: for the trials of M2; M4 decides whether a track is kept at all.
+FILE *open_track(int dungeon)
+{
+	char when[32];
+	time_t now = time(nullptr);
+	strftime(when, sizeof when, "%Y%m%d-%H%M%S", localtime(&now));
+	std::string file = "track-" + std::to_string(dungeon) + "-" + when + ".csv";
+	char *folder = obs_module_config_path("");
+	char *path = obs_module_config_path(file.c_str());
+	FILE *track = nullptr;
+	if (folder && path) {
+		os_mkdirs(folder);
+		track = os_fopen(path, "w");
+		if (track) {
+			fputs("ms,u,v,facing,likeness,took\n", track);
+			LOG(LOG_INFO, "places written to %s", path);
+		}
+	}
+	bfree(folder);
+	bfree(path);
+	return track;
+}
+
 // The matching thread: builds the mosaics of the dungeon chosen, and looks for each square it is handed.
 void work(Filter *f)
 {
 	int dungeon = -1, zoom = -1;
 	std::unique_ptr<Follower> follower;
+	FILE *track = nullptr;
 	std::unique_lock<std::mutex> held(f->lock);
 	for (;;) {
 		f->wake.wait(held, [&] { return f->stop || f->box || f->dungeon != dungeon || f->zoom != zoom; });
-		if (f->stop)
+		if (f->stop) {
+			if (track)
+				fclose(track);
 			return;
+		}
 		if (f->dungeon != dungeon || f->zoom != zoom) {
 			dungeon = f->dungeon;
 			zoom = f->zoom;
@@ -234,6 +264,9 @@ void work(Filter *f)
 			uint64_t started = os_gettime_ns();
 			std::vector<Mosaic> mosaics = dungeon ? twinmap_dungeon(dungeon) : std::vector<Mosaic>{};
 			follower = std::make_unique<Follower>(mosaics, widths_of(zoom));
+			if (track)
+				fclose(track);
+			track = dungeon ? open_track(dungeon) : nullptr;
 			LOG(LOG_INFO, "dungeon %d, zoom %d: %zu mosaics in %.0f ms", dungeon, zoom, mosaics.size(),
 			    (os_gettime_ns() - started) / 1e6);
 			held.lock();
@@ -254,6 +287,14 @@ void work(Filter *f)
 			    got->score, got->facing ? std::to_string(int(std::lround(*got->facing))).c_str() : "-", took);
 		else
 			LOG(LOG_INFO, "no place, %.1f ms", took);
+		if (track) {
+			if (got)
+				fprintf(track, "%.0f,%.2f,%.2f,%s,%.3f,%.1f\n", ms, got->u, got->v,
+					got->facing ? std::to_string(int(std::lround(*got->facing))).c_str() : "", got->score, took);
+			else
+				fprintf(track, "%.0f,,,,,%.1f\n", ms, took);
+			fflush(track);
+		}
 		held.lock();
 	}
 }
