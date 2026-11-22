@@ -2,6 +2,8 @@
 
 An OBS Studio plugin that shows where your character is inside a dungeon or a raid of WoW: Forever, on a live map, by reading the minimap from the game capture.
 
+<p align="center"><img src="docs/images/map.png" alt="The map of The Hall of Thanes in OBS, with the dot and the arrow of the character at the entrance" width="420"></p>
+
 ## How it works
 
 - A filter goes on the source that captures the game. You mark once where the minimap is.
@@ -31,11 +33,28 @@ It does not read or change the memory of the game, inject anything into it, send
 ## Set it up
 
 1. **Capture the game.** Add a *Game Capture* source for WoW: Forever, if you have none yet.
-2. **Add the filter.** Right click the game capture, *Filters*, then **+** under *Effect Filters* and choose *Dungeon Live Map*. The first time, the plugin lays the rooms of every dungeon from your game files: it takes some seconds, and the dungeon list fills in once it is done (close and open the filter's properties again).
+
+   <img src="docs/images/step-1-capture.png" alt="Add Source, Game Capture, Add a new Game Capture" width="760">
+
+2. **Add the filter.** Select the game capture and click *Filters* (or right click it, *Filters*), then **+** under *Effect Filters* and choose *Dungeon Live Map*. The first time, the plugin lays the rooms of every dungeon from your game files: it takes some seconds, and the dungeon list fills in once it is done (close and open the filter's properties again).
+
+   <img src="docs/images/step-2-filter.png" alt="Filters of the game capture, plus, Dungeon Live Map" width="760">
+
 3. **Mark the minimap.** In the filter, tick *Show the minimap square over the game*. A green square and ring appear over the game in the filter's preview. Move the sliders *left*, *top* and *side* until the sides of the square touch the round minimap. Then untick the box.
+
+   <img src="docs/images/step-3-square.jpg" alt="The filter's properties with the square shown, the sliders, and the green square over the minimap" width="760">
+
 4. **Pick the dungeon and the zoom.** Choose the dungeon or raid from the list. Keep the minimap at its widest zoom in the game and choose zoom *1* in the filter: the other zooms are not measured yet.
+
+   <img src="docs/images/step-4-dungeon.jpg" alt="The list of dungeons and the zoom of the filter" width="760">
+
 5. **Add the map.** In your scene, add a *Dungeon Map* source, and scale and place it as you like. It follows the first Dungeon Live Map filter by itself.
+
+   <img src="docs/images/step-5-map.png" alt="Add Source, Dungeon Map, Add a new Dungeon Map" width="760">
+
 6. **Hide the game if you want the map alone.** Turn off the eye of the game capture in the scene, but keep it there: the map keeps it running out of sight.
+
+   <img src="docs/images/step-6-hide.png" alt="The game capture hidden with its eye, the map alone in the scene with the dot" width="760">
 
 Go into the dungeon: the dot follows you. Change the dungeon in the filter before entering another one.
 
