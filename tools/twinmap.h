@@ -58,3 +58,17 @@ inline std::vector<Mosaic> twinmap_mosaics(const std::string &pieces_txt, const 
 		return at->second;
 	});
 }
+
+/** A mosaic as a PGM whose comment line holds u0 v0. */
+inline bool read_pgm(const std::string &path, Mosaic &m)
+{
+	std::ifstream in(path, std::ios::binary);
+	std::string magic, hash;
+	if (!(in >> magic >> hash >> m.u0 >> m.v0 >> m.width >> m.height) || magic != "P5")
+		return false;
+	int most;
+	in >> most;
+	in.get();
+	m.grey.resize(size_t(m.width) * m.height);
+	return bool(in.read(reinterpret_cast<char *>(m.grey.data()), std::streamsize(m.grey.size())));
+}
