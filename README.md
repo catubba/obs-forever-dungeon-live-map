@@ -1,4 +1,9 @@
-# OBS Forever Dungeon Live Map
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/images/lockup-dark.png">
+    <img src="docs/images/lockup-light.png" alt="OBS Forever Dungeon Live Map" width="560">
+  </picture>
+</p>
 
 An OBS Studio plugin that shows where your character is inside a dungeon or a raid of WoW: Forever, on a live map, by reading the minimap from the game capture.
 
