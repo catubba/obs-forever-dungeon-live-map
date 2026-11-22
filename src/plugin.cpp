@@ -26,10 +26,13 @@
 #include <ctime>
 #include <filesystem>
 #include <fstream>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <string>
 #include <thread>
+#include <tuple>
+#include <utility>
 
 OBS_DECLARE_MODULE()
 OBS_MODULE_USE_DEFAULT_LOCALE("obs-forever-dungeon-live-map", "en-US")
@@ -45,6 +48,7 @@ struct Filter {
 	obs_source_t *source;
 	std::atomic<int> x{0}, y{0}, size{238};
 	std::atomic<bool> save_wanted{false};
+	std::atomic<bool> show_square{false}; // the square drawn over the game, to set it by eye
 
 	// Graphics thread only.
 	gs_texrender_t *texrender = nullptr;
@@ -202,24 +206,38 @@ bool write_whole(const fs::path &file, const std::string &text)
 // for each dungeon and raid with rooms (rooms.h), and maps.txt, "number|name|kind" a line, written last.
 // None without a game. chosen: the game folder set in the properties; empty, the one the installer says.
 // ponytail: the folders of older builds are kept; remove them when a build is seen to replace them.
-std::optional<fs::path> rooms_of_build(const std::string &chosen)
+struct Installed {
+	fs::path game, folder; // the game folder, and the folder of the rooms of its build
+	Build build;
+};
+std::optional<Installed> installed_game(const std::string &chosen)
 {
-	static std::mutex one_at_a_time; // two filters must not build the same folder together
-	std::lock_guard<std::mutex> held(one_at_a_time);
 	std::vector<fs::path> where;
 	if (!chosen.empty())
 		where.push_back(fs::u8path(chosen));
 	if (std::optional<fs::path> installed = registry_install_path())
 		where.push_back(*installed);
 	std::optional<fs::path> game = game_folder_from(where);
-	if (!game) {
-		LOG(LOG_WARNING, "World of Warcraft: Forever not found: choose its folder in the filter's properties");
+	if (!game)
 		return std::nullopt;
-	}
 	Build build = *installed_build(*game);
 	char *config = obs_module_config_path("builds");
 	fs::path folder = fs::u8path(config ? config : "builds") / build.build_key;
 	bfree(config);
+	return Installed{*game, folder, build};
+}
+
+std::optional<fs::path> rooms_of_build(const std::string &chosen)
+{
+	static std::mutex one_at_a_time; // two filters must not build the same folder together
+	std::lock_guard<std::mutex> held(one_at_a_time);
+	std::optional<Installed> found = installed_game(chosen);
+	if (!found) {
+		LOG(LOG_WARNING, "World of Warcraft: Forever not found: choose its folder in the filter's properties");
+		return std::nullopt;
+	}
+	const fs::path &folder = found->folder, *game = &found->game;
+	const Build &build = found->build;
 	std::error_code error;
 	if (fs::exists(folder / "maps.txt", error))
 		return folder;
@@ -375,6 +393,7 @@ void filter_update(void *data, obs_data_t *settings)
 	f->x = int(obs_data_get_int(settings, "x"));
 	f->y = int(obs_data_get_int(settings, "y"));
 	f->size = int(std::clamp<long long>(obs_data_get_int(settings, "size"), SMALLEST, LARGEST));
+	f->show_square = obs_data_get_bool(settings, "show");
 	std::lock_guard<std::mutex> held(f->lock);
 	f->dungeon = int(obs_data_get_int(settings, "dungeon"));
 	f->zoom = int(std::clamp<long long>(obs_data_get_int(settings, "zoom"), 0, 5));
@@ -411,14 +430,65 @@ void filter_defaults(obs_data_t *settings)
 	obs_data_set_default_int(settings, "size", 238);
 }
 
+// The dungeons and raids with rooms in the build already laid, by name; none before it is laid.
+std::vector<std::pair<std::string, uint32_t>> known_maps(const std::string &chosen)
+{
+	std::vector<std::pair<std::string, uint32_t>> list;
+	std::optional<Installed> found = installed_game(chosen);
+	if (!found)
+		return list;
+	std::ifstream in(found->folder / "maps.txt");
+	std::map<std::string, int> seen;
+	std::vector<std::tuple<std::string, uint32_t, bool>> rows;
+	for (std::string line; std::getline(in, line);) {
+		size_t a = line.find('|'), b = line.rfind('|');
+		if (a == std::string::npos || b <= a)
+			continue;
+		std::string name = line.substr(a + 1, b - a - 1);
+		rows.emplace_back(name, uint32_t(std::stoul(line.substr(0, a))), line.substr(b + 1) == "raid");
+		seen[name]++;
+	}
+	for (const auto &[name, id, raid] : rows) {
+		std::string label = name + (raid ? " (" + std::string(obs_module_text("Raid")) + ")" : "");
+		if (seen[name] > 1) // the same name twice, as Naxxramas: told apart by the map's number
+			label += " #" + std::to_string(id);
+		list.emplace_back(label, id);
+	}
+	std::sort(list.begin(), list.end());
+	return list;
+}
+
 obs_properties_t *filter_properties(void *data)
 {
+	auto *f = static_cast<Filter *>(data);
 	obs_properties_t *props = obs_properties_create();
-	obs_properties_add_int(props, "x", obs_module_text("MinimapX"), 0, 16384, 1);
-	obs_properties_add_int(props, "y", obs_module_text("MinimapY"), 0, 16384, 1);
-	obs_properties_add_int(props, "size", obs_module_text("MinimapSize"), SMALLEST, LARGEST, 1);
-	obs_properties_add_int(props, "dungeon", obs_module_text("Dungeon"), 0, 100000, 1);
-	obs_properties_add_int(props, "zoom", obs_module_text("Zoom"), 0, 5, 1);
+
+	std::string game;
+	{
+		std::lock_guard<std::mutex> held(f->lock);
+		game = f->game;
+	}
+	obs_property_t *dungeons = obs_properties_add_list(props, "dungeon", obs_module_text("Dungeon"), OBS_COMBO_TYPE_LIST,
+							   OBS_COMBO_FORMAT_INT);
+	std::vector<std::pair<std::string, uint32_t>> maps = known_maps(game);
+	obs_property_list_add_int(dungeons, obs_module_text(maps.empty() ? "DungeonsNotYet" : "DungeonNone"), 0);
+	for (const auto &[label, id] : maps)
+		obs_property_list_add_int(dungeons, label.c_str(), id);
+
+	obs_property_t *zooms = obs_properties_add_list(props, "zoom", obs_module_text("Zoom"), OBS_COMBO_TYPE_LIST, OBS_COMBO_FORMAT_INT);
+	for (int zoom = 0; zoom < 6; zoom++) {
+		char label[128];
+		std::snprintf(label, sizeof label, obs_module_text("ZoomItem"), zoom + 1, int(INDOOR_YARDS[zoom]));
+		obs_property_list_add_int(zooms, label, zoom);
+	}
+
+	// The square of the minimap, moved with sliders while it is drawn over the game.
+	obs_source_t *parent = obs_filter_get_parent(f->source);
+	int width = parent ? int(obs_source_get_width(parent)) : 0, height = parent ? int(obs_source_get_height(parent)) : 0;
+	obs_properties_add_bool(props, "show", obs_module_text("ShowSquare"));
+	obs_properties_add_int_slider(props, "x", obs_module_text("MinimapX"), 0, width > 0 ? width - SMALLEST : 16384, 1);
+	obs_properties_add_int_slider(props, "y", obs_module_text("MinimapY"), 0, height > 0 ? height - SMALLEST : 16384, 1);
+	obs_properties_add_int_slider(props, "size", obs_module_text("MinimapSize"), SMALLEST, LARGEST, 1);
 	obs_properties_add_path(props, "game", obs_module_text("GameFolder"), OBS_PATH_DIRECTORY, nullptr, nullptr);
 	obs_properties_add_button2(
 		props, "save", obs_module_text("SaveMinimap"),
@@ -428,6 +498,36 @@ obs_properties_t *filter_properties(void *data)
 		},
 		data);
 	return props;
+}
+
+// The square of the minimap over the game, and the ring the matching looks inside (KEEP of minimap.cpp): the
+// square is right when its sides touch the round minimap.
+void draw_square(int x, int y, int size)
+{
+	constexpr double PI = 3.14159265358979323846, KEEP = 0.8;
+	constexpr uint32_t COLOR = 0xFF00FF40; // green, seen on the game
+	double t = std::max(2.0, size / 80.0), half = size / 2.0, cx = x + half, cy = y + half;
+	std::vector<std::pair<double, double>> points;
+	auto quad = [&](double x0, double y0, double x1, double y1, double x2, double y2, double x3, double y3) {
+		points.insert(points.end(), {{x0, y0}, {x1, y1}, {x2, y2}, {x0, y0}, {x2, y2}, {x3, y3}});
+	};
+	quad(x, y, x + size, y, x + size, y + t, x, y + t);                         // top
+	quad(x, y + size - t, x + size, y + size - t, x + size, y + size, x, y + size); // bottom
+	quad(x, y, x + t, y, x + t, y + size, x, y + size);                         // left
+	quad(x + size - t, y, x + size, y, x + size, y + size, x + size - t, y + size); // right
+	for (int i = 0; i < 64; i++) {
+		double a = 2 * PI * i / 64, b = 2 * PI * (i + 1) / 64, r = half * KEEP, s = r - t;
+		quad(cx + r * std::cos(a), cy + r * std::sin(a), cx + r * std::cos(b), cy + r * std::sin(b), cx + s * std::cos(b),
+		     cy + s * std::sin(b), cx + s * std::cos(a), cy + s * std::sin(a));
+	}
+	gs_effect_t *solid = obs_get_base_effect(OBS_EFFECT_SOLID);
+	gs_effect_set_color(gs_effect_get_param_by_name(solid, "color"), COLOR);
+	while (gs_effect_loop(solid, "Solid")) {
+		gs_render_start(true);
+		for (const auto &[px, py] : points)
+			gs_vertex2f(float(px), float(py));
+		gs_render_stop(GS_TRIS);
+	}
 }
 
 void filter_render(void *data, gs_effect_t *)
@@ -453,6 +553,8 @@ void filter_render(void *data, gs_effect_t *)
 		f->saving = save_now && f->staged;
 	}
 	obs_source_skip_video_filter(f->source);
+	if (f->show_square)
+		draw_square(f->x, f->y, f->size);
 }
 
 } // namespace
