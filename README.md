@@ -9,6 +9,27 @@ An OBS Studio plugin that shows where your character is inside a dungeon or a ra
 
 <p align="center"><img src="docs/images/map.png" alt="The map of The Hall of Thanes in OBS, with the dot and the arrow of the character at the entrance" width="420"></p>
 
+## Everything happens inside OBS
+
+> [!IMPORTANT]
+> **All the work is done inside the OBS process (`obs64.exe`):** cutting the minimap out of the capture, matching it against the rooms, following the character, drawing the map.
+>
+> **The plugin never opens the game's process, never reads or writes its memory, sends no input, and uses no network.**
+
+### For the game, it is the same as streaming or recording
+
+The frames come from OBS's own *Game Capture* source. To work, that source loads OBS's graphics hook into the game: the same hook every streamer and every recording made with Game Capture already has, with or without this plugin. The filter works downstream, on a picture OBS already holds. From the game's side there is no difference between this plugin and a stream on Twitch.
+
+### What the plugin touches, and what it never does
+
+| | |
+|---|---|
+| **The game's process** | Never. No memory read or written, no code injected by the plugin, no input sent. |
+| **The frames** | Taken from OBS's Game Capture, exactly as for any stream or recording. |
+| **The network** | Never used. |
+| **The game's files** | Read only. The rooms are laid once per build of the game, from its archive (CASC) and its cache of keys; after that only `.build.info` is read, to tell which build is installed. Nothing is ever written in the game's folder: the plugin's own data goes to OBS's config folder. |
+| **The Windows registry** | Read only, to find where the game is installed. |
+
 ## How it works
 
 - A filter goes on the source that captures the game. You mark once where the minimap is.
@@ -16,10 +37,6 @@ An OBS Studio plugin that shows where your character is inside a dungeon or a ra
 - Twice a second the filter cuts the minimap out of the captured frame and looks for that picture among the rooms of the dungeon. Where it fits is where you are.
 - A source draws the map of the dungeon with a dot and an arrow where you are. When the minimap matches no place, the dot goes: it does not guess.
 - The maps are built from your own game files, read only, the first time the plugin meets a build of the game. Nothing from the game is shipped with the plugin.
-
-## What it does not do
-
-It does not read or change the memory of the game, inject anything into it, send keys or clicks, or write any file of the game. It only looks at the frames OBS already captures, like any stream overlay, and reads the game's files the way the game itself does.
 
 ## Requirements
 
