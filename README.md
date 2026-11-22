@@ -47,10 +47,13 @@ The frames come from OBS's own *Game Capture* source. To work, that source loads
 ## Install
 
 1. Close OBS.
-2. Copy the folder `obs-forever-dungeon-live-map` into `C:\ProgramData\obs-studio\plugins\`, so that you have:
+2. Download `obs-forever-dungeon-live-map-<version>-windows-x64.zip` from the [Releases](https://github.com/catubba/obs-forever-dungeon-live-map/releases) page.
+3. Extract it into `C:\ProgramData\obs-studio\plugins\`. The zip holds a folder `obs-forever-dungeon-live-map`, so that you end up with:
    - `C:\ProgramData\obs-studio\plugins\obs-forever-dungeon-live-map\bin\64bit\obs-forever-dungeon-live-map.dll`
    - `C:\ProgramData\obs-studio\plugins\obs-forever-dungeon-live-map\data\locale\en-US.ini`
-3. Start OBS.
+4. Start OBS.
+
+To update, close OBS and extract the new zip over the old folder. To remove the plugin, delete that folder.
 
 ## Set it up
 
@@ -101,7 +104,7 @@ The first configure downloads and builds the OBS sources it needs (a few minutes
 
 ## Status
 
-Works in the dungeons tried so far, at the widest zoom of the minimap. Not released yet.
+Version 1.0.0. It works in the dungeons and raids tried so far, with the minimap at its widest zoom (zoom 1): the other zooms are not measured yet. The open ground of a dungeon, the parts with no roof over them, is not drawn yet: there the dot goes until you are back under a roof.
 
 ## License
 

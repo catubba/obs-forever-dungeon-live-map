@@ -39,7 +39,7 @@ jobs:
           New-Item -ItemType Directory -Force "$out/bin/64bit", "$out/data" | Out-Null
           Copy-Item "build_x64/RelWithDebInfo/$name.dll", "build_x64/RelWithDebInfo/$name.pdb" "$out/bin/64bit/"
           Copy-Item -Recurse data/* "$out/data/"
-          Copy-Item LICENSE, README.md "$out/"
+          Copy-Item LICENSE, README.md, CHANGELOG.md "$out/"
           $version = if ($env:GITHUB_REF_TYPE -eq 'tag') { $env:GITHUB_REF_NAME } else { $env:GITHUB_SHA.Substring(0, 7) }
           Compress-Archive -Path "package/$name" -DestinationPath "$name-$version-windows-x64.zip"
           "ZIP=$name-$version-windows-x64.zip" >> $env:GITHUB_ENV
