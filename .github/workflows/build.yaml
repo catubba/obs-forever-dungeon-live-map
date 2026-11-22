@@ -1,0 +1,56 @@
+name: Build
+
+# Builds the plugin for Windows x64 and packs it as a zip laid out for C:\ProgramData\obs-studio\plugins.
+# On a tag v*, the zip goes to a draft release of that tag: its text is written before it is published.
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+
+      # The OBS sources and their prebuilt dependencies, downloaded and built by the first configure.
+      - uses: actions/cache@v4
+        with:
+          path: .deps
+          key: deps-windows-x64-${{ hashFiles('buildspec.json', 'cmake/**') }}
+
+      - name: Configure
+        run: cmake --preset windows-ci-x64
+
+      - name: Build
+        run: cmake --build --preset windows-ci-x64
+
+      - name: Pack
+        shell: pwsh
+        run: |
+          $name = 'obs-forever-dungeon-live-map'
+          $out = "package/$name"
+          New-Item -ItemType Directory -Force "$out/bin/64bit", "$out/data" | Out-Null
+          Copy-Item "build_x64/RelWithDebInfo/$name.dll", "build_x64/RelWithDebInfo/$name.pdb" "$out/bin/64bit/"
+          Copy-Item -Recurse data/* "$out/data/"
+          Copy-Item LICENSE, README.md "$out/"
+          $version = if ($env:GITHUB_REF_TYPE -eq 'tag') { $env:GITHUB_REF_NAME } else { $env:GITHUB_SHA.Substring(0, 7) }
+          Compress-Archive -Path "package/$name" -DestinationPath "$name-$version-windows-x64.zip"
+          "ZIP=$name-$version-windows-x64.zip" >> $env:GITHUB_ENV
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.ZIP }}
+          path: ${{ env.ZIP }}
+
+      - name: Draft release
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "${{ github.ref_name }}" "${{ env.ZIP }}" --draft --title "${{ github.ref_name }}" --notes ""
