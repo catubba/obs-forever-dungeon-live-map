@@ -7,8 +7,10 @@
 // texture, copied to memory, and read at the next frame, so the graphics card is never waited for.
 // The square goes to a thread of its own, which looks for it among the rooms of the dungeon.
 
+#include "casc.h"
+#include "interiors.h"
 #include "minimap.h"
-#include "twinmap.h"
+#include "rooms.h"
 
 #include <obs-module.h>
 #include <util/platform.h>
@@ -19,10 +21,9 @@
 #include <cmath>
 #include <condition_variable>
 #include <cstdio>
-#include <cstdlib>
-#include <cstring>
 #include <ctime>
 #include <filesystem>
+#include <fstream>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -32,6 +33,8 @@ OBS_DECLARE_MODULE()
 OBS_MODULE_USE_DEFAULT_LOCALE("obs-forever-dungeon-live-map", "en-US")
 
 #define LOG(level, format, ...) blog(level, "[obs-forever-dungeon-live-map] " format, ##__VA_ARGS__)
+
+namespace fs = std::filesystem;
 
 namespace {
 
@@ -56,6 +59,7 @@ struct Filter {
 	std::optional<Box> box; // the latest square not looked at yet; a newer one takes its place
 	double box_ms = 0;
 	int dungeon = 0, zoom = 0;
+	std::string game; // the game folder chosen; empty for the one the installer says
 	bool stop = false;
 	std::thread worker;
 };
@@ -175,47 +179,88 @@ void cut(Filter *f)
 	f->staged_at = os_gettime_ns();
 }
 
-// The rooms of a dungeon from what Twinmap Forever took out of the game: its interiors.json and rooms
-// folder, in the first build folder under %LOCALAPPDATA%\Twinmap\tiles.
-// ponytail: Twinmap's data until M3 reads the game's files; the open ground is left out (not in v1).
-std::vector<Mosaic> twinmap_dungeon(int id)
+// Writes a file under another name first: a file is either whole or not there.
+bool write_whole(const fs::path &file, const std::string &text)
 {
-	namespace fs = std::filesystem;
-	const char *local = std::getenv("LOCALAPPDATA");
+	fs::path part = file;
+	part += ".part";
+	{
+		std::ofstream out(part, std::ios::binary);
+		if (!(out << text))
+			return false;
+	}
 	std::error_code error;
-	fs::path folder;
-	if (local)
-		for (const fs::directory_entry &entry : fs::directory_iterator(fs::path(local) / "Twinmap" / "tiles", error))
-			if (entry.is_directory()) {
-				folder = entry.path();
-				break;
-			}
-	if (folder.empty()) {
-		LOG(LOG_WARNING, "no Twinmap data under %%LOCALAPPDATA%%\\Twinmap\\tiles");
-		return {};
+	fs::rename(part, file, error);
+	return !error;
+}
+
+// The folder of the rooms of the installed build, made from the game's files the first time the build is
+// met, read only on the game's side: <plugin config>/builds/<build key>/, holding rooms/, <map number>.txt
+// for each dungeon and raid with rooms (rooms.h), and maps.txt, "number|name|kind" a line, written last.
+// None without a game. chosen: the game folder set in the properties; empty, the one the installer says.
+// ponytail: the folders of older builds are kept; remove them when a build is seen to replace them.
+std::optional<fs::path> rooms_of_build(const std::string &chosen)
+{
+	static std::mutex one_at_a_time; // two filters must not build the same folder together
+	std::lock_guard<std::mutex> held(one_at_a_time);
+	std::vector<fs::path> where;
+	if (!chosen.empty())
+		where.push_back(fs::u8path(chosen));
+	if (std::optional<fs::path> installed = registry_install_path())
+		where.push_back(*installed);
+	std::optional<fs::path> game = game_folder_from(where);
+	if (!game) {
+		LOG(LOG_WARNING, "World of Warcraft: Forever not found: choose its folder in the filter's properties");
+		return std::nullopt;
 	}
-	std::vector<Piece> pieces;
-	obs_data_t *all = obs_data_create_from_json_file((folder / "interiors.json").u8string().c_str());
-	obs_data_array_t *maps = all ? obs_data_get_array(all, "maps") : nullptr;
-	for (size_t i = 0; maps && i < obs_data_array_count(maps); i++) {
-		obs_data_t *map = obs_data_array_item(maps, i);
-		if (obs_data_get_int(map, "id") == id && strcmp(obs_data_get_string(map, "kind"), "world") != 0) {
-			obs_data_array_t *list = obs_data_get_array(map, "pieces");
-			for (size_t k = 0; k < obs_data_array_count(list); k++) {
-				obs_data_t *p = obs_data_array_item(list, k);
-				pieces.push_back({uint32_t(obs_data_get_int(p, "file")), obs_data_get_double(p, "u"),
-						  obs_data_get_double(p, "v"), obs_data_get_double(p, "width"),
-						  obs_data_get_double(p, "height"), obs_data_get_double(p, "angle"),
-						  int(obs_data_get_int(p, "level"))});
-				obs_data_release(p);
+	Build build = *installed_build(*game);
+	char *config = obs_module_config_path("builds");
+	fs::path folder = fs::u8path(config ? config : "builds") / build.build_key;
+	bfree(config);
+	std::error_code error;
+	if (fs::exists(folder / "maps.txt", error))
+		return folder;
+
+	LOG(LOG_INFO, "laying the rooms of build %s from %s", build.version.c_str(), game->u8string().c_str());
+	uint64_t started = os_gettime_ns();
+	try {
+		GameFiles files(*game, sent_keys(*game));
+		// A file still locked (the server has sent no key for it) is a file the map does without.
+		ReadFile read = [&](uint32_t id) -> std::optional<Bytes> {
+			try {
+				return files.read(id);
+			} catch (const EncryptedFile &) {
+				return std::nullopt;
 			}
-			obs_data_array_release(list);
+		};
+		auto opens = [&](const std::string &key) { return files.opens(key); };
+		// These tables have parts the game keeps encrypted: read around the ones still locked.
+		std::optional<Bytes> maps = files.read(MAP_FILE, true), pictures = files.read(ROOM_PICTURES_FILE, true);
+		if (!maps || !pictures)
+			throw std::runtime_error("the game has no table of its maps or of its room pictures");
+		fs::create_directories(folder / "rooms");
+		Converter converter(read, room_pictures(Table(std::move(*pictures), opens)), folder / "rooms");
+		std::vector<MapEntry> list = map_entries(Table(std::move(*maps), opens));
+		std::string index;
+		for (size_t i = 0; i < list.size(); i++) {
+			const MapEntry &map = list[i];
+			std::vector<Laid> laid = converter.convert(map);
+			if (!laid.empty()) { // no world file, or no room with a picture: not a dungeon to follow
+				if (!write_whole(folder / (std::to_string(map.id) + ".txt"), pieces_text(laid)))
+					throw std::runtime_error("cannot write in " + folder.u8string());
+				index += std::to_string(map.id) + "|" + map.name + "|" + (map.raid ? "raid" : "dungeon") + "\n";
+			}
+			if ((i + 1) % 10 == 0 || i + 1 == list.size())
+				LOG(LOG_INFO, "rooms laid: %zu of %zu maps", i + 1, list.size());
 		}
-		obs_data_release(map);
+		if (!write_whole(folder / "maps.txt", index))
+			throw std::runtime_error("cannot write in " + folder.u8string());
+		LOG(LOG_INFO, "rooms of build %s ready in %.1f s", build.version.c_str(), (os_gettime_ns() - started) / 1e9);
+		return folder;
+	} catch (const std::exception &e) {
+		LOG(LOG_WARNING, "the rooms could not be laid: %s", e.what());
+		return std::nullopt;
 	}
-	obs_data_array_release(maps);
-	obs_data_release(all);
-	return mosaics_from_rooms(pieces, (folder / "rooms").u8string());
 }
 
 // A new file for the places found in a dungeon, in the plugin's config folder: track-<dungeon>-<time>.csv,
@@ -247,22 +292,30 @@ FILE *open_track(int dungeon)
 void work(Filter *f)
 {
 	int dungeon = -1, zoom = -1;
+	std::string game = "\x01"; // none yet
 	std::unique_ptr<Follower> follower;
 	FILE *track = nullptr;
 	std::unique_lock<std::mutex> held(f->lock);
 	for (;;) {
-		f->wake.wait(held, [&] { return f->stop || f->box || f->dungeon != dungeon || f->zoom != zoom; });
+		f->wake.wait(held, [&] {
+			return f->stop || f->box || f->dungeon != dungeon || f->zoom != zoom || f->game != game;
+		});
 		if (f->stop) {
 			if (track)
 				fclose(track);
 			return;
 		}
-		if (f->dungeon != dungeon || f->zoom != zoom) {
+		if (f->dungeon != dungeon || f->zoom != zoom || f->game != game) {
 			dungeon = f->dungeon;
 			zoom = f->zoom;
+			game = f->game;
 			held.unlock();
+			// The rooms of the build are laid first, once, here: the drawing of OBS never waits for them.
+			std::optional<fs::path> rooms = rooms_of_build(game);
 			uint64_t started = os_gettime_ns();
-			std::vector<Mosaic> mosaics = dungeon ? twinmap_dungeon(dungeon) : std::vector<Mosaic>{};
+			std::vector<Mosaic> mosaics;
+			if (rooms && dungeon)
+				mosaics = mosaics_from_files(*rooms / (std::to_string(dungeon) + ".txt"), *rooms / "rooms");
 			follower = std::make_unique<Follower>(mosaics, widths_of(zoom));
 			if (track)
 				fclose(track);
@@ -313,6 +366,7 @@ void filter_update(void *data, obs_data_t *settings)
 	std::lock_guard<std::mutex> held(f->lock);
 	f->dungeon = int(obs_data_get_int(settings, "dungeon"));
 	f->zoom = int(std::clamp<long long>(obs_data_get_int(settings, "zoom"), 0, 5));
+	f->game = obs_data_get_string(settings, "game");
 	f->wake.notify_one();
 }
 
@@ -353,6 +407,7 @@ obs_properties_t *filter_properties(void *data)
 	obs_properties_add_int(props, "size", obs_module_text("MinimapSize"), SMALLEST, LARGEST, 1);
 	obs_properties_add_int(props, "dungeon", obs_module_text("Dungeon"), 0, 100000, 1);
 	obs_properties_add_int(props, "zoom", obs_module_text("Zoom"), 0, 5, 1);
+	obs_properties_add_path(props, "game", obs_module_text("GameFolder"), OBS_PATH_DIRECTORY, nullptr, nullptr);
 	obs_properties_add_button2(
 		props, "save", obs_module_text("SaveMinimap"),
 		[](obs_properties_t *, obs_property_t *, void *data) {

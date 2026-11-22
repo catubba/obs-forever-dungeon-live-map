@@ -9,7 +9,7 @@
 // each, one a line. Writes "ms,u,v,facing,took" a line, as Twinmap does.
 
 #include "minimap.h"
-#include "twinmap.h"
+#include "rooms.h"
 
 #include <charconv>
 #include <chrono>
@@ -34,7 +34,7 @@ int main(int argc, char **argv)
 		std::fprintf(stderr, "replay <pieces.txt> <rooms folder> <boxes.raw> <boxes.txt> <out.csv> [zoom]\n");
 		return 2;
 	}
-	std::vector<Mosaic> mosaics = twinmap_mosaics(argv[1], argv[2]);
+	std::vector<Mosaic> mosaics = mosaics_from_files(argv[1], argv[2]);
 	// ponytail: the open ground is not in v1; a PGM of it, as Twinmap builds it, only to compare with Twinmap.
 	if (argc > 7) {
 		Mosaic open;
