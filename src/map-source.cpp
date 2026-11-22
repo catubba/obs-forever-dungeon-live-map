@@ -2,9 +2,9 @@
 // Copyright (C) 2026 catubba
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// The source that draws the map: the rooms of the level the character is on, a pixel a yard, and a dot
-// with an arrow where the filter finds the character. The dot goes when the filter finds no place: it does
-// not guess. The source is as large as the dungeon; the scene scales it.
+// The source that draws the map: the rooms of the level the character is on, in their colors, a pixel a
+// yard, and a dot with an arrow where the filter finds the character. The dot goes when the filter finds no
+// place: it does not guess. The source is as large as the dungeon; the scene scales it.
 //
 // The filter works only while OBS draws the source it is on, and the game capture stops when nothing shows
 // it. So the map keeps that source shown and draws it, out of sight, on a texture of one pixel: the scene
@@ -120,20 +120,14 @@ void forget_textures(MapSource *s)
 	s->textures.clear();
 }
 
-// A texture for each mosaic: its grey, see-through where there is nothing.
+// A texture for each mosaic: its colors, see-through where there is nothing.
 void make_textures(MapSource *s, const std::shared_ptr<const std::vector<Mosaic>> &mosaics)
 {
 	forget_textures(s);
 	s->drawn = mosaics;
 	s->level = mosaics ? mosaics->size() - 1 : 0;
 	for (const Mosaic &m : mosaics ? *mosaics : std::vector<Mosaic>{}) {
-		std::vector<uint8_t> bgra(m.grey.size() * 4);
-		for (size_t i = 0; i < m.grey.size(); i++) {
-			uint8_t g = m.grey[i];
-			bgra[i * 4] = bgra[i * 4 + 1] = bgra[i * 4 + 2] = g;
-			bgra[i * 4 + 3] = g ? 255 : 0;
-		}
-		const uint8_t *data = bgra.data();
+		const uint8_t *data = m.bgra.data();
 		s->textures.push_back(gs_texture_create(uint32_t(m.width), uint32_t(m.height), GS_BGRA, 1, &data, 0));
 	}
 	const Mosaic *top = mosaics && !mosaics->empty() ? &mosaics->back() : nullptr;
